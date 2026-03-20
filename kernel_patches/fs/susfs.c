@@ -33,8 +33,17 @@ bool susfs_is_log_enabled __read_mostly = true;
 #define SUSFS_LOGE(fmt, ...) 
 #endif
 
+bool susfs_starts_with(const char *str, const char *prefix) {
+    while (*prefix) {
+        if (*str++ != *prefix++)
+            return false;
+    }
+    return true;
+}
+
 /* sus_path */
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
+static LIST_HEAD(LH_SUS_PATH_LOOP);
 static LIST_HEAD(LH_SUS_PATH_ANDROID_DATA);
 static LIST_HEAD(LH_SUS_PATH_SDCARD);
 static struct st_android_data_path android_data_path = {0};
@@ -112,130 +121,196 @@ out_kfree_info:
 	return err;
 }
 
-int susfs_add_sus_path(struct st_susfs_sus_path* __user user_info) {
-	struct st_susfs_sus_path_list *cursor = NULL, *temp = NULL;
-	struct st_susfs_sus_path_list *new_list = NULL;
-	struct st_susfs_sus_path info;
-	struct path path;
-	struct inode *inode = NULL;
-	char *resolved_pathname = NULL, *tmp_buf = NULL;
-	int err = 0;
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+void susfs_add_sus_path(void __user **user_info) {
+    struct st_susfs_sus_path_list *new_list = NULL;
+    struct st_susfs_sus_path info = {0};
+    struct path path;
+    struct inode *inode = NULL;
+    char *resolved_pathname = NULL, *tmp_buf = NULL;
+    void __user *argp = (void __user *)*user_info;
 
-	err = copy_from_user(&info, user_info, sizeof(info));
-	if (err) {
-		SUSFS_LOGE("failed copying from userspace\n");
-		return err;
-	}
+    if (!argp) return;
 
-	err = kern_path(info.target_pathname, LOOKUP_FOLLOW, &path);
-	if (err) {
-		SUSFS_LOGE("Failed opening file '%s'\n", info.target_pathname);
-		return err;
-	}
+    if (copy_from_user(&info, (struct st_susfs_sus_path __user*)argp, sizeof(info))) {
+        info.err = -EFAULT;
+        goto out_copy_to_user;
+    }
 
-	if (!path.dentry->d_inode) {
-		err = -EINVAL;
-		goto out_path_put_path;
-	}
-	inode = d_inode(path.dentry);
+    info.err = kern_path(info.target_pathname, LOOKUP_FOLLOW, &path);
+    if (info.err) {
+        SUSFS_LOGE("Failed opening file '%s'\n", info.target_pathname);
+        goto out_copy_to_user;
+    }
 
-	tmp_buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
-	if (!tmp_buf) {
-		err = -ENOMEM;
-		goto out_path_put_path;
-	}
+    inode = d_inode(path.dentry);
+    if (!inode || !inode->i_mapping) {
+        info.err = -EINVAL;
+        goto out_path_put_path;
+    }
 
-	resolved_pathname = d_path(&path, tmp_buf, PAGE_SIZE);
-	if (!resolved_pathname) {
-		err = -ENOMEM;
-		goto out_kfree_tmp_buf;
-	}
+    tmp_buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
+    if (!tmp_buf) {
+        info.err = -ENOMEM;
+        goto out_path_put_path;
+    }
 
-	if (strstr(resolved_pathname, android_data_path.pathname)) {
-		if (!android_data_path.is_inited) {
-			err = -EINVAL;
-			SUSFS_LOGE("android_data_path is not configured yet, plz do like 'ksu_susfs set_android_data_root_path /sdcard/Android/data' first after your screen is unlocked\n");
-			goto out_kfree_tmp_buf;
-		}
-		list_for_each_entry_safe(cursor, temp, &LH_SUS_PATH_ANDROID_DATA, list) {
-			if (unlikely(!strcmp(cursor->info.target_pathname, path.dentry->d_name.name))) {
-				spin_lock(&susfs_spin_lock);
-				cursor->info.target_ino = info.target_ino;
-				strncpy(cursor->info.target_pathname, path.dentry->d_name.name, SUSFS_MAX_LEN_PATHNAME - 1);
-				strncpy(cursor->target_pathname, resolved_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
-				cursor->info.i_uid = info.i_uid;
-				cursor->path_len = strlen(cursor->info.target_pathname);
-				SUSFS_LOGI("target_ino: '%lu', target_pathname: '%s', i_uid: '%u', is successfully updated to LH_SUS_PATH_ANDROID_DATA\n",
-							cursor->info.target_ino, cursor->target_pathname, cursor->info.i_uid);
-				spin_unlock(&susfs_spin_lock);
-				goto out_kfree_tmp_buf;
-			}
-		}
-		new_list = kmalloc(sizeof(struct st_susfs_sus_path_list), GFP_KERNEL);
-		if (!new_list) {
-			err = -ENOMEM;
-			goto out_kfree_tmp_buf;
-		}
-		new_list->info.target_ino = info.target_ino;
-		strncpy(new_list->info.target_pathname, path.dentry->d_name.name, SUSFS_MAX_LEN_PATHNAME - 1);
-		strncpy(new_list->target_pathname, resolved_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
-		new_list->info.i_uid = info.i_uid;
-		new_list->path_len = strlen(new_list->info.target_pathname);
-		INIT_LIST_HEAD(&new_list->list);
-		spin_lock(&susfs_spin_lock);
-		list_add_tail(&new_list->list, &LH_SUS_PATH_ANDROID_DATA);
-		SUSFS_LOGI("target_ino: '%lu', target_pathname: '%s', i_uid: '%u', is successfully added to LH_SUS_PATH_ANDROID_DATA\n",
-					new_list->info.target_ino, new_list->target_pathname, new_list->info.i_uid);
-		spin_unlock(&susfs_spin_lock);
-		goto out_kfree_tmp_buf;
-	} else if (strstr(resolved_pathname, sdcard_path.pathname)) {
-		if (!sdcard_path.is_inited) {
-			err = -EINVAL;
-			SUSFS_LOGE("sdcard_path is not configured yet, plz do like 'ksu_susfs set_sdcard_root_path /sdcard' first after your screen is unlocked\n");
-			goto out_kfree_tmp_buf;
-		}
-		list_for_each_entry_safe(cursor, temp, &LH_SUS_PATH_SDCARD, list) {
-			if (unlikely(!strcmp(cursor->info.target_pathname, path.dentry->d_name.name))) {
-				spin_lock(&susfs_spin_lock);
-				cursor->info.target_ino = info.target_ino;
-				strncpy(cursor->info.target_pathname, path.dentry->d_name.name, SUSFS_MAX_LEN_PATHNAME - 1);
-				strncpy(cursor->target_pathname, resolved_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
-				cursor->info.i_uid = info.i_uid;
-				cursor->path_len = strlen(cursor->info.target_pathname);
-				SUSFS_LOGI("target_ino: '%lu', target_pathname: '%s', i_uid: '%u', is successfully updated to LH_SUS_PATH_SDCARD\n",
-							cursor->info.target_ino, cursor->target_pathname, cursor->info.i_uid);
-				spin_unlock(&susfs_spin_lock);
-				goto out_kfree_tmp_buf;
-			}
-		}
-		new_list = kmalloc(sizeof(struct st_susfs_sus_path_list), GFP_KERNEL);
-		if (!new_list) {
-			err = -ENOMEM;
-			goto out_kfree_tmp_buf;
-		}
-		new_list->info.target_ino = info.target_ino;
-		strncpy(new_list->info.target_pathname, path.dentry->d_name.name, SUSFS_MAX_LEN_PATHNAME - 1);
-		strncpy(new_list->target_pathname, resolved_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
-		new_list->info.i_uid = info.i_uid;
-		new_list->path_len = strlen(new_list->info.target_pathname);
-		INIT_LIST_HEAD(&new_list->list);
-		spin_lock(&susfs_spin_lock);
-		list_add_tail(&new_list->list, &LH_SUS_PATH_SDCARD);
-		SUSFS_LOGI("target_ino: '%lu', target_pathname: '%s', i_uid: '%u', is successfully added to LH_SUS_PATH_SDCARD\n",
-					new_list->info.target_ino, new_list->target_pathname, new_list->info.i_uid);
-		spin_unlock(&susfs_spin_lock);
-		goto out_kfree_tmp_buf;
-	}
+    resolved_pathname = d_path(&path, tmp_buf, PAGE_SIZE);
+    if (IS_ERR(resolved_pathname)) {
+        info.err = PTR_ERR(resolved_pathname);
+        goto out_kfree_tmp_buf;
+    }
 
-	spin_lock(&inode->i_lock);
-	inode->i_state |= INODE_STATE_SUS_PATH;
-	SUSFS_LOGI("pathname: '%s', ino: '%lu', is flagged as INODE_STATE_SUS_PATH\n", resolved_pathname, info.target_ino);
-	spin_unlock(&inode->i_lock);
+    if (strstr(resolved_pathname, android_data_path.target_pathname)) {
+        if (!android_data_path.is_inited) {
+            info.err = -EINVAL;
+            SUSFS_LOGE("android_data_path not inited\n");
+            goto out_kfree_tmp_buf;
+        }
+        new_list = kmalloc(sizeof(struct st_susfs_sus_path_list), GFP_KERNEL);
+        if (!new_list) { info.err = -ENOMEM; goto out_kfree_tmp_buf; }
+
+        new_list->info.target_ino = info.target_ino;
+        strncpy(new_list->info.target_pathname, path.dentry->d_name.name, SUSFS_MAX_LEN_PATHNAME - 1);
+        strncpy(new_list->target_pathname, resolved_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
+        new_list->info.i_uid = info.i_uid;
+        new_list->path_len = strlen(new_list->info.target_pathname);
+        INIT_LIST_HEAD(&new_list->list);
+
+        spin_lock(&susfs_spin_lock_sus_path);
+        list_add_tail(&new_list->list, &LH_SUS_PATH_ANDROID_DATA);
+        spin_unlock(&susfs_spin_lock_sus_path);
+
+        info.err = 0;
+    } else if (strstr(resolved_pathname, sdcard_path.target_pathname)) {
+        if (!sdcard_path.is_inited) {
+            info.err = -EINVAL;
+            SUSFS_LOGE("sdcard_path not inited\n");
+            goto out_kfree_tmp_buf;
+        }
+        new_list = kmalloc(sizeof(struct st_susfs_sus_path_list), GFP_KERNEL);
+        if (!new_list) { info.err = -ENOMEM; goto out_kfree_tmp_buf; }
+
+        new_list->info.target_ino = info.target_ino;
+        strncpy(new_list->info.target_pathname, path.dentry->d_name.name, SUSFS_MAX_LEN_PATHNAME - 1);
+        strncpy(new_list->target_pathname, resolved_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
+        new_list->info.i_uid = info.i_uid;
+        new_list->path_len = strlen(new_list->info.target_pathname);
+        INIT_LIST_HEAD(&new_list->list);
+
+        spin_lock(&susfs_spin_lock_sus_path);
+        list_add_tail(&new_list->list, &LH_SUS_PATH_SDCARD);
+        spin_unlock(&susfs_spin_lock_sus_path);
+
+        info.err = 0;
+    } else {
+        spin_lock(&inode->i_lock);
+        set_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
+        inode->i_state |= INODE_STATE_SUS_PATH;
+        spin_unlock(&inode->i_lock);
+        info.err = 0;
+    }
+
 out_kfree_tmp_buf:
-	kfree(tmp_buf);
+    kfree(tmp_buf);
 out_path_put_path:
-	path_put(&path);
-	return err;
+    path_put(&path);
+out_copy_to_user:
+    if (copy_to_user(&((struct st_susfs_sus_path __user*)argp)->err, &info.err, sizeof(info.err))) {
+        info.err = -EFAULT;
+    }
+    SUSFS_LOGI("CMD_SUSFS_ADD_SUS_PATH -> ret: %d\n", info.err);
+}
+#endif
+
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+void susfs_add_sus_path_loop(void __user **user_info) {
+    struct st_susfs_sus_path_list *new_list = NULL;
+    struct st_susfs_sus_path info = {0};
+    struct path path;
+    struct inode *inode = NULL;
+    void __user *argp = (void __user *)*user_info;
+
+    if (!argp) return;
+
+    if (copy_from_user(&info, (struct st_susfs_sus_path __user*)argp, sizeof(info))) {
+        info.err = -EFAULT;
+        goto out_copy_to_user;
+    }
+
+    info.err = kern_path(info.target_pathname, 0, &path);
+    if (info.err) {
+        SUSFS_LOGE("Failed opening file '%s'\n", info.target_pathname);
+        goto out_copy_to_user;
+    }
+
+    inode = d_inode(path.dentry);
+    if (!inode || !inode->i_mapping) {
+        info.err = -EINVAL;
+        goto out_path_put_path;
+    }
+
+    if (susfs_starts_with(info.target_pathname, "/storage/") ||
+        susfs_starts_with(info.target_pathname, "/sdcard/"))
+    {
+        info.err = -EINVAL;
+        SUSFS_LOGE("path starts with /storage or /sdcard cannot be added by add_sus_path_loop\n");
+        goto out_path_put_path;
+    }
+
+    new_list = kmalloc(sizeof(struct st_susfs_sus_path_list), GFP_KERNEL);
+    if (!new_list) {
+        info.err = -ENOMEM;
+        goto out_path_put_path;
+    }
+
+    new_list->info.target_ino = info.target_ino;
+    strncpy(new_list->info.target_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
+    strncpy(new_list->target_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
+    new_list->info.i_uid = info.i_uid;
+    new_list->path_len = strlen(new_list->info.target_pathname);
+    INIT_LIST_HEAD(&new_list->list);
+
+    spin_lock(&susfs_spin_lock_sus_path);
+    list_add_tail(&new_list->list, &LH_SUS_PATH_LOOP);
+    spin_unlock(&susfs_spin_lock_sus_path);
+
+    SUSFS_LOGI("target_ino: '%lu', target_pathname: '%s', is added to LH_SUS_PATH_LOOP\n",
+                new_list->info.target_ino, new_list->target_pathname);
+
+    spin_lock(&inode->i_lock);
+    set_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
+    spin_unlock(&inode->i_lock);
+
+    info.err = 0;
+
+out_path_put_path:
+    path_put(&path);
+
+out_copy_to_user:
+    if (copy_to_user(&((struct st_susfs_sus_path __user*)argp)->err, &info.err, sizeof(info.err))) {
+        SUSFS_LOGE("failed to copy err to user\n");
+    }
+    SUSFS_LOGI("CMD_SUSFS_ADD_SUS_PATH_LOOP -> ret: %d\n", info.err);
+}
+#endif
+
+void susfs_run_sus_path_loop(void) {
+    struct st_susfs_sus_path_list *cursor;
+    struct path path;
+    struct inode *inode;
+
+    list_for_each_entry(cursor, &LH_SUS_PATH_LOOP, list) {
+        if (!kern_path(cursor->target_pathname, 0, &path)) {
+            inode = d_inode(path.dentry);
+            if (inode && inode->i_mapping) {
+                spin_lock(&inode->i_lock);
+                set_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
+                spin_unlock(&inode->i_lock);
+            }
+            path_put(&path);
+        }
+    }
 }
 
 static inline bool is_i_uid_in_android_data_not_allowed(uid_t i_uid) {
@@ -883,15 +958,35 @@ void susfs_spoof_uname(struct new_utsname* tmp) {
 
 /* set_log */
 #ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
-void susfs_set_log(bool enabled) {
-	spin_lock(&susfs_spin_lock);
-	susfs_is_log_enabled = enabled;
-	spin_unlock(&susfs_spin_lock);
-	if (susfs_is_log_enabled) {
-		pr_info("susfs: enable logging to kernel");
-	} else {
-		pr_info("susfs: disable logging to kernel");
-	}
+static DEFINE_SPINLOCK(susfs_spin_lock_enable_log);
+
+void susfs_enable_log(void __user **user_info) {
+    struct st_susfs_log info = {0};
+    void __user *argp = (void __user *)*user_info;
+
+    if (!argp) return;
+    if (copy_from_user(&info, (struct st_susfs_log __user*)argp, sizeof(info))) {
+        info.err = -EFAULT;
+        goto out_copy_to_user;
+    }
+
+    spin_lock(&susfs_spin_lock_enable_log);
+    susfs_is_log_enabled = info.enabled;
+    spin_unlock(&susfs_spin_lock_enable_log);
+
+    if (susfs_is_log_enabled) {
+        pr_info("susfs: enable logging to kernel\n");
+    } else {
+        pr_info("susfs: disable logging to kernel\n");
+    }
+
+    info.err = 0;
+
+out_copy_to_user:
+    if (copy_to_user(&((struct st_susfs_log __user*)argp)->err, &info.err, sizeof(info.err))) {
+        pr_err("susfs: failed to copy log err to user\n");
+    }
+    SUSFS_LOGI("CMD_SUSFS_ENABLE_LOG -> ret: %d\n", info.err);
 }
 #endif // #ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
 
@@ -1030,6 +1125,84 @@ struct filename* susfs_get_redirected_path(unsigned long ino) {
 }
 #endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
 
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+void susfs_add_sus_map(void __user **user_info) {
+    struct st_susfs_sus_map info = {0};
+    struct path path;
+    struct inode *inode = NULL;
+    void __user *argp = (void __user *)*user_info; // 同样解引用二级指针
+
+    if (!argp) return;
+
+    if (copy_from_user(&info, (struct st_susfs_sus_map __user*)argp, sizeof(info))) {
+        info.err = -EFAULT;
+        goto out_copy_err;
+    }
+
+    info.err = kern_path(info.target_pathname, LOOKUP_FOLLOW, &path);
+    if (info.err) {
+        SUSFS_LOGE("Failed opening file '%s'\n", info.target_pathname);
+        goto out_copy_err;
+    }
+
+    inode = d_inode(path.dentry);
+    if (!inode || !inode->i_mapping) {
+        info.err = -EINVAL;
+        goto out_path_put_path;
+    }
+
+    spin_lock(&inode->i_lock);
+    set_bit(AS_FLAGS_SUS_MAP, &inode->i_mapping->flags);
+    spin_unlock(&inode->i_lock);
+
+    SUSFS_LOGI("pathname: '%s', is flagged as AS_FLAGS_SUS_MAP\n", info.target_pathname);
+    info.err = 0;
+
+out_path_put_path:
+    path_put(&path);
+
+out_copy_err:
+    if (copy_to_user(&((struct st_susfs_sus_map __user*)argp)->err, &info.err, sizeof(info.err))) {
+        SUSFS_LOGE("failed to copy err to user\n");
+    }
+    SUSFS_LOGI("CMD_SUSFS_ADD_SUS_MAP -> ret: %d\n", info.err);
+}
+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP
+
+/* susfs avc log spoofing */
+bool susfs_is_avc_log_spoofing_enabled = false;
+EXPORT_SYMBOL_GPL(susfs_is_avc_log_spoofing_enabled);
+static DEFINE_SPINLOCK(susfs_spin_lock_set_avc_log_spoofing);
+
+void susfs_set_avc_log_spoofing(void __user **user_info) {
+    struct st_susfs_avc_log_spoofing info = {0};
+    void __user *argp = (void __user *)*user_info;
+
+    if (!argp) {
+        return;
+    }
+
+    if (copy_from_user(&info, (struct st_susfs_avc_log_spoofing __user*)argp, sizeof(info))) {
+        info.err = -EFAULT;
+        goto out_copy_to_user;
+    }
+
+    spin_lock(&susfs_spin_lock_set_avc_log_spoofing);
+    susfs_is_avc_log_spoofing_enabled = info.enabled;
+    spin_unlock(&susfs_spin_lock_set_avc_log_spoofing);
+
+    SUSFS_LOGI("susfs_is_avc_log_spoofing_enabled: %d\n", info.enabled);
+    info.err = 0;
+
+out_copy_to_user:
+    if (copy_to_user(&((struct st_susfs_avc_log_spoofing __user*)argp)->err, &info.err, sizeof(info.err))) {
+        info.err = -EFAULT;
+        SUSFS_LOGE("failed to copy avc spoof err back to user\n");
+    }
+
+    SUSFS_LOGI("CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING -> ret: %d\n", info.err);
+}
+
 /* sus_su */
 #ifdef CONFIG_KSU_SUSFS_SUS_SU
 extern int susfs_sus_su_working_mode;
@@ -1097,91 +1270,121 @@ static int copy_config_to_buf(const char *config_string, char *buf_ptr, size_t *
 	return 0;
 }
 
-int susfs_get_enabled_features(char __user* buf, size_t bufsize) {
-	char *kbuf = NULL, *buf_ptr = NULL;
+void susfs_get_enabled_features(void __user **user_info) {
+	void __user *argp = (void __user *)*user_info;
+	struct st_susfs_enabled_features *info = (struct st_susfs_enabled_features *)kzalloc(sizeof(struct st_susfs_enabled_features), GFP_KERNEL);
+	char *buf_ptr = NULL;
 	size_t copied_size = 0;
-	int err = 0;
 
-	kbuf = kzalloc(bufsize, GFP_KERNEL);
-	if (!kbuf) {
-		return -ENOMEM;
+	if (!info) {
+		SUSFS_LOGE("kzalloc failed\n");
+		return;
 	}
 
-	buf_ptr = kbuf;
+	if (copy_from_user(info, (struct st_susfs_enabled_features __user*)argp, sizeof(struct st_susfs_enabled_features))) {
+		info->err = -EFAULT;
+		goto out_copy_to_user;
+	}
+
+	buf_ptr = info->enabled_features;
+
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_SUS_PATH\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
+	info->err = copy_config_to_buf("CONFIG_KSU_SUSFS_SUS_PATH\n", buf_ptr, &copied_size, SUSFS_ENABLED_FEATURES_SIZE);
+	if (info->err) goto out_copy_to_user;
+	buf_ptr = info->enabled_features + copied_size;
 #endif
 #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_SUS_MOUNT\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
-#endif
-#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
-#endif
-#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
+	info->err = copy_config_to_buf("CONFIG_KSU_SUSFS_SUS_MOUNT\n", buf_ptr, &copied_size, SUSFS_ENABLED_FEATURES_SIZE);
+	if (info->err) goto out_copy_to_user;
+	buf_ptr = info->enabled_features + copied_size;
 #endif
 #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_SUS_KSTAT\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
-#endif
-#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_TRY_UMOUNT\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
-#endif
-#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
+	info->err = copy_config_to_buf("CONFIG_KSU_SUSFS_SUS_KSTAT\n", buf_ptr, &copied_size, SUSFS_ENABLED_FEATURES_SIZE);
+	if (info->err) goto out_copy_to_user;
+	buf_ptr = info->enabled_features + copied_size;
 #endif
 #ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_SPOOF_UNAME\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
+	info->err = copy_config_to_buf("CONFIG_KSU_SUSFS_SPOOF_UNAME\n", buf_ptr, &copied_size, SUSFS_ENABLED_FEATURES_SIZE);
+	if (info->err) goto out_copy_to_user;
+	buf_ptr = info->enabled_features + copied_size;
 #endif
 #ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_ENABLE_LOG\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
+	info->err = copy_config_to_buf("CONFIG_KSU_SUSFS_ENABLE_LOG\n", buf_ptr, &copied_size, SUSFS_ENABLED_FEATURES_SIZE);
+	if (info->err) goto out_copy_to_user;
+	buf_ptr = info->enabled_features + copied_size;
 #endif
 #ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
+	info->err = copy_config_to_buf("CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS\n", buf_ptr, &copied_size, SUSFS_ENABLED_FEATURES_SIZE);
+	if (info->err) goto out_copy_to_user;
+	buf_ptr = info->enabled_features + copied_size;
 #endif
 #ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
+	info->err = copy_config_to_buf("CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG\n", buf_ptr, &copied_size, SUSFS_ENABLED_FEATURES_SIZE);
+	if (info->err) goto out_copy_to_user;
+	buf_ptr = info->enabled_features + copied_size;
 #endif
 #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_OPEN_REDIRECT\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
+	info->err = copy_config_to_buf("CONFIG_KSU_SUSFS_OPEN_REDIRECT\n", buf_ptr, &copied_size, SUSFS_ENABLED_FEATURES_SIZE);
+	if (info->err) goto out_copy_to_user;
+	buf_ptr = info->enabled_features + copied_size;
 #endif
-#ifdef CONFIG_KSU_SUSFS_SUS_SU
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_SUS_SU\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+	info->err = copy_config_to_buf("CONFIG_KSU_SUSFS_SUS_MAP\n", buf_ptr, &copied_size, SUSFS_ENABLED_FEATURES_SIZE);
+	if (info->err) goto out_copy_to_user;
+	buf_ptr = info->enabled_features + copied_size;
 #endif
-#ifdef CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
-	err = copy_config_to_buf("CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT\n", buf_ptr, &copied_size, bufsize);
-	if (err) goto out_kfree_kbuf;
-	buf_ptr = kbuf + copied_size;
-#endif
-	err = copy_to_user((void __user*)buf, (void *)kbuf, bufsize);
-out_kfree_kbuf:
-	kfree(kbuf);
-	return err;
+
+	info->err = 0;
+
+out_copy_to_user:
+	if (copy_to_user((struct st_susfs_enabled_features __user*)argp, info, sizeof(struct st_susfs_enabled_features))) {
+		// 这里无法再通过 info->err 报错，因为 copy_to_user 本身就失败了
+	}
+	SUSFS_LOGI("CMD_SUSFS_SHOW_ENABLED_FEATURES -> ret: %d\n", info->err);
+
+	if (info) {
+		kfree(info);
+	}
+}
+
+void susfs_show_variant(void __user **user_info) {
+    struct st_susfs_variant info = {0};
+    void __user *argp = (void __user *)*user_info;
+
+    if (!argp) return;
+
+    if (copy_from_user(&info, (struct st_susfs_variant __user*)argp, sizeof(info))) {
+        info.err = -EFAULT;
+        goto out_copy;
+    }
+
+    strncpy(info.susfs_variant, SUSFS_VARIANT, SUSFS_MAX_VARIANT_BUFSIZE - 1);
+    info.err = 0;
+
+out_copy:
+    if (copy_to_user((struct st_susfs_variant __user*)argp, &info, sizeof(info))) {
+        SUSFS_LOGE("copy_to_user failed\n");
+    }
+}
+
+void susfs_show_version(void __user **user_info) {
+    struct st_susfs_version info = {0};
+    void __user *argp = (void __user *)*user_info;
+
+    if (!argp) return;
+
+    if (copy_from_user(&info, (struct st_susfs_version __user*)argp, sizeof(info))) {
+        info.err = -EFAULT;
+        goto out_copy;
+    }
+
+    strncpy(info.susfs_version, SUSFS_VERSION, SUSFS_MAX_VERSION_BUFSIZE - 1);
+    info.err = 0;
+
+out_copy:
+    if (copy_to_user((struct st_susfs_version __user*)argp, &info, sizeof(info))) {
+        SUSFS_LOGE("copy_to_user failed\n");
+    }
 }
 
 

@@ -30,6 +30,7 @@ struct st_susfs_sus_path {
 	unsigned long                    target_ino;
 	char                             target_pathname[SUSFS_MAX_LEN_PATHNAME];
 	unsigned int                     i_uid;
+	int                              err;
 };
 
 struct st_susfs_sus_path_list {
@@ -127,6 +128,46 @@ struct st_susfs_open_redirect_hlist {
 };
 #endif
 
+/* enable_log */
+#ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
+struct st_susfs_log {
+	bool                                    enabled;
+	int                                     err;
+};
+#endif
+
+/* sus_map */
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+struct st_susfs_sus_map {
+	char                                    target_pathname[SUSFS_MAX_LEN_PATHNAME];
+	int                                     err;
+};
+#endif
+
+/* get enabled features */
+struct st_susfs_enabled_features {
+	char                                    enabled_features[SUSFS_ENABLED_FEATURES_SIZE];
+	int                                     err;
+};
+
+/* show variant */
+struct st_susfs_variant {
+	char                                    susfs_variant[16];
+	int                                     err;
+};
+
+/* show version */
+struct st_susfs_version {
+	char                                    susfs_version[16];
+	int                                     err;
+};
+
+/* avc log spoofing */
+struct st_susfs_avc_log_spoofing {
+	bool                                    enabled;
+	int                                     err;
+};
+
 /* sus_su */
 #ifdef CONFIG_KSU_SUSFS_SUS_SU
 struct st_sus_su {
@@ -140,7 +181,8 @@ struct st_sus_su {
 /* sus_path */
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 int susfs_set_i_state_on_external_dir(char __user* user_info, int cmd);
-int susfs_add_sus_path(struct st_susfs_sus_path* __user user_info);
+void susfs_add_sus_path(void __user **user_info);
+void susfs_add_sus_path_loop(void __user **user_info);
 #endif
 /* sus_mount */
 #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
@@ -175,7 +217,7 @@ void susfs_spoof_uname(struct new_utsname* tmp);
 #endif
 /* set_log */
 #ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
-void susfs_set_log(bool enabled);
+void susfs_enable_log(void __user **user_info);
 #endif
 /* spoof_cmdline_or_bootconfig */
 #ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
@@ -193,7 +235,15 @@ int susfs_get_sus_su_working_mode(void);
 int susfs_sus_su(struct st_sus_su* __user user_info);
 #endif
 
-int susfs_get_enabled_features(char __user* buf, size_t bufsize);
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+void susfs_add_sus_map(void __user **user_info);
+#endif
+
+void susfs_set_avc_log_spoofing(void __user **user_info);
+
+void susfs_get_enabled_features(void __user **user_info);
+void susfs_show_variant(void __user **user_info);
+void susfs_show_version(void __user **user_info);
 
 /* susfs_init */
 void susfs_init(void);
