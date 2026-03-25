@@ -162,7 +162,7 @@ void susfs_add_sus_path(void __user **user_info) {
         goto out_kfree_tmp_buf;
     }
 
-    if (strstr(resolved_pathname, android_data_path.target_pathname)) {
+    if (strstr(resolved_pathname, android_data_path.pathname)) {
         if (!android_data_path.is_inited) {
             info.err = -EINVAL;
             SUSFS_LOGE("android_data_path not inited\n");
@@ -183,7 +183,7 @@ void susfs_add_sus_path(void __user **user_info) {
         spin_unlock(&susfs_spin_lock_sus_path);
 
         info.err = 0;
-    } else if (strstr(resolved_pathname, sdcard_path.target_pathname)) {
+    } else if (strstr(resolved_pathname, sdcard_path.pathname)) {
         if (!sdcard_path.is_inited) {
             info.err = -EINVAL;
             SUSFS_LOGE("sdcard_path not inited\n");

@@ -82,6 +82,7 @@ struct st_susfs_sus_kstat {
 	long                    spoofed_ctime_tv_nsec;
 	unsigned long           spoofed_blksize;
 	unsigned long long      spoofed_blocks;
+	int                     err
 };
 
 struct st_susfs_sus_kstat_hlist {
