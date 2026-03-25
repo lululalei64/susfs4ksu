@@ -62,6 +62,11 @@ struct st_susfs_sus_mount_list {
 	struct list_head                        list;
 	struct st_susfs_sus_mount               info;
 };
+
+struct susfs_set_hide_sus_mnts_for_non_su_procs {
+	bool                                    enabled;
+	int                                     err;
+};
 #endif
 
 /* sus_kstat */

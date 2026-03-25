@@ -413,6 +413,35 @@ bool susfs_is_inode_sus_path(struct inode *inode) {
 /* sus_mount */
 #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 static LIST_HEAD(LH_SUS_MOUNT);
+
+static DEFINE_SPINLOCK(susfs_spin_lock_sus_mount);
+bool susfs_hide_sus_mnts_for_all_procs = true;
+
+void susfs_set_hide_sus_mnts_for_non_su_procs(void __user **user_info) {
+	void __user *argp = (void __user *)*user_info;
+	struct st_susfs_hide_sus_mnts_for_non_su_procs info = {0};
+
+	if (!argp) return;
+
+	if (copy_from_user(&info, (struct st_susfs_hide_sus_mnts_for_non_su_procs __user*)argp, sizeof(info))) {
+		info.err = -EFAULT;
+		goto out_copy_to_user;
+	}
+
+	spin_lock(&susfs_spin_lock_sus_mount);
+	susfs_hide_sus_mnts_for_non_su_procs = info.enabled;
+	spin_unlock(&susfs_spin_lock_sus_mount);
+
+	SUSFS_LOGI("susfs_hide_sus_mnts_for_non_su_procs: %d\n", info.enabled);
+	info.err = 0;
+
+out_copy_to_user:
+	if (copy_to_user(&((struct st_susfs_hide_sus_mnts_for_non_su_procs __user*)argp)->err, &info.err, sizeof(info.err))) {
+		info.err = -EFAULT;
+	}
+	SUSFS_LOGI("CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS -> ret: %d\n", info.err);
+}
+
 static void susfs_update_sus_mount_inode(char *target_pathname) {
 	struct mount *mnt = NULL;
 	struct path p;
