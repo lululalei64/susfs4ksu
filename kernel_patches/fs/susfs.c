@@ -415,7 +415,7 @@ bool susfs_is_inode_sus_path(struct inode *inode) {
 static LIST_HEAD(LH_SUS_MOUNT);
 
 static DEFINE_SPINLOCK(susfs_spin_lock_sus_mount);
-bool susfs_hide_sus_mnts_for_all_procs = true;
+bool susfs_hide_sus_mnts_for_non_su_procs = true;
 
 void susfs_set_hide_sus_mnts_for_non_su_procs(void __user **user_info) {
 	void __user *argp = (void __user *)*user_info;
