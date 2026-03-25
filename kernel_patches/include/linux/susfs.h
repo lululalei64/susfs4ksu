@@ -82,7 +82,7 @@ struct st_susfs_sus_kstat {
 	long                    spoofed_ctime_tv_nsec;
 	unsigned long           spoofed_blksize;
 	unsigned long long      spoofed_blocks;
-	int                     err
+	int                     err;
 };
 
 struct st_susfs_sus_kstat_hlist {
@@ -110,6 +110,7 @@ struct st_susfs_try_umount_list {
 struct st_susfs_uname {
 	char        release[__NEW_UTS_LEN+1];
 	char        version[__NEW_UTS_LEN+1];
+	int         err;
 };
 #endif
 
@@ -119,6 +120,7 @@ struct st_susfs_open_redirect {
 	unsigned long                    target_ino;
 	char                             target_pathname[SUSFS_MAX_LEN_PATHNAME];
 	char                             redirected_pathname[SUSFS_MAX_LEN_PATHNAME];
+	int                              err;
 };
 
 struct st_susfs_open_redirect_hlist {
@@ -173,6 +175,14 @@ struct st_susfs_avc_log_spoofing {
 #ifdef CONFIG_KSU_SUSFS_SUS_SU
 struct st_sus_su {
 	int         mode;
+};
+#endif
+
+/* spoof_cmdline_or_bootconfig */
+#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+struct st_susfs_spoof_cmdline_or_bootconfig {
+	char                                    fake_cmdline_or_bootconfig[SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE];
+	int                                     err;
 };
 #endif
 
