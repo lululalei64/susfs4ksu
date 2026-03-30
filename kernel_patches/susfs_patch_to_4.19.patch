@@ -840,12 +840,10 @@ index 1557315..841b75d 100644
 +			}
 +		}
 +#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
-#ifdef CONFIG_SECURITY_DEFEX
+ #ifdef CONFIG_SECURITY_DEFEX
 		if (!IS_ERR(f) && task_defex_enforce(current, f, -__NR_openat)) {
             fput(f);
             f = ERR_PTR(-EPERM);
-        }
-#endif
 diff --git a/fs/proc/base.c b/fs/proc/base.c
 index 78692a8..48205ef 100644
 --- a/fs/proc/base.c
@@ -868,7 +866,7 @@ index 78692a8..48205ef 100644
 +	struct vm_area_struct *vma;
 +#endif
 
- 	if (!mm)
+    if (!mm)
  		return 0;
 @@ -837,6 +843,20 @@ static ssize_t mem_rw(struct file *file, char __user *buf,
 
