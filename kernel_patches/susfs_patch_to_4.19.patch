@@ -840,9 +840,9 @@ index 1557315..841b75d 100644
 +			}
 +		}
 +#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
-
- #ifdef CONFIG_SECURITY_DEFEX
- 		if (!IS_ERR(f) && task_defex_enforce(current, f, -__NR_openat)) {
+ 		if (IS_ERR(f)) {
+ 			put_unused_fd(fd);
+ 			fd = PTR_ERR(f);
 diff --git a/fs/proc/base.c b/fs/proc/base.c
 index 78692a8..48205ef 100644
 --- a/fs/proc/base.c
