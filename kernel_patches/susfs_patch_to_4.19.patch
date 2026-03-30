@@ -361,10 +361,11 @@ diff --git a/fs/namespace.c b/fs/namespace.c
 index 5e94ec9..95ce1c5 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
-@@ -26,10 +26,24 @@
+@@ -26,11 +26,25 @@
  #include <linux/bootmem.h>
  #include <linux/task_work.h>
  #include <linux/sched/task.h>
+ #include <linux/fslog.h>
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +#include <linux/susfs_def.h>
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
@@ -815,7 +816,7 @@ index 1557315..841b75d 100644
 
  	if (fd)
  		return fd;
-@@ -1103,8 +1111,26 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
+@@ -1103,13 +1111,26 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
  		return PTR_ERR(tmp);
 
  	fd = get_unused_fd_flags(flags);
@@ -839,9 +840,12 @@ index 1557315..841b75d 100644
 +			}
 +		}
 +#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
- 		if (IS_ERR(f)) {
- 			put_unused_fd(fd);
- 			fd = PTR_ERR(f);
+#ifdef CONFIG_SECURITY_DEFEX
+		if (!IS_ERR(f) && task_defex_enforce(current, f, -__NR_openat)) {
+            fput(f);
+            f = ERR_PTR(-EPERM);
+        }
+#endif
 diff --git a/fs/proc/base.c b/fs/proc/base.c
 index 78692a8..48205ef 100644
 --- a/fs/proc/base.c
@@ -1075,9 +1079,9 @@ index 9e17d92..dd5e369 100644
 --- a/fs/proc/task_mmu.c
 +++ b/fs/proc/task_mmu.c
 @@ -21,6 +21,9 @@
- #include <linux/pkeys.h>
  #include <linux/mm_inline.h>
- #include <linux/ctype.h>
+ #include <linux/pkeys.h>
+ #include <linux/freezer.h>
 +#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)
 +#include <linux/susfs_def.h>
 +#endif // #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)
@@ -1205,7 +1209,7 @@ index 9e17d92..dd5e369 100644
 @@ -901,7 +979,19 @@ static int show_smaps_rollup(struct seq_file *m, void *v)
  	hold_task_mempolicy(priv);
 
- 	for (vma = priv->mm->mmap; vma; vma = vma->vm_next) {
+ 	for (vma = priv->mm->mmap; vma;) {
 +#ifdef CONFIG_KSU_SUSFS_SUS_MAP
 +	if (vma->vm_file) {
 +		struct inode *inode = file_inode(vma->vm_file);
