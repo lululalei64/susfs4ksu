@@ -816,7 +816,7 @@ index 1557315..841b75d 100644
 
  	if (fd)
  		return fd;
-@@ -1103,13 +1111,26 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
+@@ -1103,18 +1111,38 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
  		return PTR_ERR(tmp);
 
  	fd = get_unused_fd_flags(flags);
@@ -840,9 +840,10 @@ index 1557315..841b75d 100644
 +			}
 +		}
 +#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
- 		if (IS_ERR(f)) {
- 			put_unused_fd(fd);
- 			fd = PTR_ERR(f);
+
+ #ifdef CONFIG_SECURITY_DEFEX
+ 		if (!IS_ERR(f) && task_defex_enforce(current, f, -__NR_openat)) {
+ 			fput(f);
 diff --git a/fs/proc/base.c b/fs/proc/base.c
 index 78692a8..48205ef 100644
 --- a/fs/proc/base.c
